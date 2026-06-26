@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Project {
+  id            String    @id @default(cuid())
+  name          String
+  path          String    @unique
+  branch        String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastScannedAt DateTime?
+  workLogs      WorkLog[]
+}
+
+model WorkLog {
+  id                String       @id @default(cuid())
+  projectId         String
+  project           Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title             String
+  aiTool            String
+  prompt            String
+  result            String
+  failureCause      String?
+  errorMessage      String?
+  attemptedSolution String?
+  nextCheck         String?
+  lesson            String?
+  nextTaskChecklist String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  fileChanges       FileChange[]
+
+  @@index([projectId])
+  @@index([aiTool])
+  @@index([result])
+}
+
+model FileChange {
+  id              String    @id @default(cuid())
+  workLogId       String
+  workLog         WorkLog   @relation(fields: [workLogId], references: [id], onDelete: Cascade)
+  filePath        String
+  gitStatus       String
+  additions       Int       @default(0)
+  deletions       Int       @default(0)
+  decision        String    @default("UNDECIDED")
+  statusSignature String?
+  restoreStatus   String?
+  restoreError    String?
+  restoredAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([workLogId])
+  @@index([decision])
+}
