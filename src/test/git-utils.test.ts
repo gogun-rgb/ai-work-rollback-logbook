@@ -11,6 +11,7 @@ import {
   assertSafeRelativePath,
   ensureGitRepository,
   getGitBinary,
+  getFileDiff,
   parseNumstat,
   parsePorcelainStatus,
   restoreSelectedFiles,
@@ -136,6 +137,48 @@ describe("Git integration", () => {
     expect(restored.replace(/\r\n/g, "\n")).toBe("one\n");
   });
 
+  it("restores staged-only tracked modifications from the index and working tree", async () => {
+    await initRepository(tempRoot);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "one\n", "utf8");
+    await git(tempRoot, ["add", "."]);
+    await git(tempRoot, ["commit", "-m", "initial"]);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "staged\n", "utf8");
+    await git(tempRoot, ["add", "tracked.txt"]);
+
+    const scan = await scanGitChanges(tempRoot);
+    const change = scan.changes.find((item) => item.filePath === "tracked.txt");
+    expect(change).toBeDefined();
+
+    const results = await restoreSelectedFiles(tempRoot, [
+      {
+        filePath: change!.filePath,
+        gitStatus: change!.gitStatus,
+        statusSignature: change!.statusSignature
+      }
+    ]);
+
+    expect(results[0]).toMatchObject({ success: true, skipped: false });
+    await expect(fs.readFile(path.join(tempRoot, "tracked.txt"), "utf8")).resolves.toBe("one\n");
+    await expect(git(tempRoot, ["status", "--porcelain=v1"])).resolves.toBe("");
+  });
+
+  it("shows staged and unstaged diffs together", async () => {
+    await initRepository(tempRoot);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "one\n", "utf8");
+    await git(tempRoot, ["add", "."]);
+    await git(tempRoot, ["commit", "-m", "initial"]);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "staged\n", "utf8");
+    await git(tempRoot, ["add", "tracked.txt"]);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "unstaged\n", "utf8");
+
+    const diff = await getFileDiff(tempRoot, "tracked.txt", "MODIFIED");
+
+    expect(diff.content).toContain("# Staged changes");
+    expect(diff.content).toContain("# Unstaged changes");
+    expect(diff.content).toContain("+staged");
+    expect(diff.content).toContain("+unstaged");
+  });
+
   it("does not delete untracked files", async () => {
     await initRepository(tempRoot);
     await fs.writeFile(path.join(tempRoot, "tracked.txt"), "one\n", "utf8");
@@ -182,6 +225,30 @@ describe("Git integration", () => {
       ])
     ).rejects.toThrow(UserFacingError);
   });
+
+  it("blocks restore when same-size content changed after review", async () => {
+    await initRepository(tempRoot);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "one\n", "utf8");
+    await git(tempRoot, ["add", "."]);
+    await git(tempRoot, ["commit", "-m", "initial"]);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "alpha\n", "utf8");
+
+    const scan = await scanGitChanges(tempRoot);
+    const change = scan.changes.find((item) => item.filePath === "tracked.txt");
+    expect(change).toBeDefined();
+
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "bravo\n", "utf8");
+
+    await expect(
+      restoreSelectedFiles(tempRoot, [
+        {
+          filePath: change!.filePath,
+          gitStatus: change!.gitStatus,
+          statusSignature: change!.statusSignature
+        }
+      ])
+    ).rejects.toThrow(UserFacingError);
+  });
 });
 
 async function initRepository(repoPath: string) {
@@ -192,7 +259,7 @@ async function initRepository(repoPath: string) {
 }
 
 async function git(repoPath: string, args: string[]) {
-  await execFileAsync(getGitBinary(), args, {
+  const { stdout } = await execFileAsync(getGitBinary(), args, {
     cwd: repoPath,
     windowsHide: true,
     env: {
@@ -200,4 +267,5 @@ async function git(repoPath: string, args: string[]) {
       GIT_OPTIONAL_LOCKS: "0"
     }
   });
+  return stdout;
 }

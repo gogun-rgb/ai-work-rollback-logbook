@@ -57,6 +57,13 @@ type GitCommandOptions = {
   maxBuffer?: number;
 };
 
+type GitChangeFingerprint = {
+  indexState: string;
+  worktreeBlob: string;
+  stagedDiff: string;
+  unstagedDiff: string;
+};
+
 export function getGitBinary() {
   return process.env.GIT_BINARY || "git";
 }
@@ -229,7 +236,15 @@ function numberOrZero(value?: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function createStatusSignature(change: Omit<GitChange, "statusSignature" | "decision">) {
+export function createStatusSignature(
+  change: Omit<GitChange, "statusSignature" | "decision">,
+  fingerprint: GitChangeFingerprint = {
+    indexState: "",
+    worktreeBlob: "",
+    stagedDiff: "",
+    unstagedDiff: ""
+  }
+) {
   return crypto
     .createHash("sha256")
     .update(
@@ -239,7 +254,11 @@ export function createStatusSignature(change: Omit<GitChange, "statusSignature" 
         change.porcelainStatus,
         change.gitStatus,
         change.additions,
-        change.deletions
+        change.deletions,
+        fingerprint.indexState,
+        fingerprint.worktreeBlob,
+        fingerprint.stagedDiff,
+        fingerprint.unstagedDiff
       ].join("\0")
     )
     .digest("hex");
@@ -254,7 +273,10 @@ export async function scanGitChanges(projectPath: string): Promise<GitScan> {
   const parsed = parsePorcelainStatus(statusOutput);
   const changes = await Promise.all(
     parsed.map(async (change) => {
-      const stats = await getFileNumstat(projectPath, change.filePath, change.gitStatus);
+      const [stats, fingerprint] = await Promise.all([
+        getFileNumstat(projectPath, change.filePath, change.gitStatus),
+        getFileFingerprint(projectPath, change.filePath)
+      ]);
       const base = {
         ...change,
         additions: stats.additions,
@@ -264,7 +286,7 @@ export async function scanGitChanges(projectPath: string): Promise<GitScan> {
       return {
         ...base,
         decision: "UNDECIDED" as const,
-        statusSignature: createStatusSignature(base)
+        statusSignature: createStatusSignature(base, fingerprint)
       };
     })
   );
@@ -299,6 +321,37 @@ export async function getFileNumstat(
   };
 }
 
+async function getFileFingerprint(
+  projectPath: string,
+  filePath: string
+): Promise<GitChangeFingerprint> {
+  const [indexState, worktreeBlob, stagedDiff, unstagedDiff] = await Promise.all([
+    runGit(projectPath, ["ls-files", "--stage", "--", filePath]).catch(() => ""),
+    runGit(projectPath, ["hash-object", "--no-filters", "--", filePath]).catch(() => "missing"),
+    getDiffHash(projectPath, filePath, true),
+    getDiffHash(projectPath, filePath, false)
+  ]);
+
+  return {
+    indexState: hashText(indexState),
+    worktreeBlob: worktreeBlob.trim() || "missing",
+    stagedDiff,
+    unstagedDiff
+  };
+}
+
+async function getDiffHash(projectPath: string, filePath: string, staged: boolean) {
+  const args = staged
+    ? ["-c", "core.quotePath=false", "diff", "--cached", "--full-index", "--binary", "--", filePath]
+    : ["-c", "core.quotePath=false", "diff", "--full-index", "--binary", "--", filePath];
+  const diff = await runGit(projectPath, args, { maxBuffer: 16 * 1024 * 1024 }).catch(() => "");
+  return hashText(diff);
+}
+
+function hashText(value: string) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
 export function summarizeChanges(changes: GitChange[]) {
   return {
     total: changes.length,
@@ -321,19 +374,15 @@ export async function getFileDiff(
     return getUntrackedPreview(projectPath, filePath);
   }
 
-  const diff = await runGit(
-    projectPath,
-    ["-c", "core.quotePath=false", "diff", "--", filePath],
-    { maxBuffer: 8 * 1024 * 1024 }
-  );
-  const cachedDiff = diff.trim()
-    ? ""
-    : await runGit(
-        projectPath,
-        ["-c", "core.quotePath=false", "diff", "--cached", "--", filePath],
-        { maxBuffer: 8 * 1024 * 1024 }
-      );
-  const content = diff.trim() ? diff : cachedDiff;
+  const [diff, cachedDiff] = await Promise.all([
+    runGit(projectPath, ["-c", "core.quotePath=false", "diff", "--", filePath], {
+      maxBuffer: 8 * 1024 * 1024
+    }),
+    runGit(projectPath, ["-c", "core.quotePath=false", "diff", "--cached", "--", filePath], {
+      maxBuffer: 8 * 1024 * 1024
+    })
+  ]);
+  const content = combineDiffs(cachedDiff, diff);
 
   if (!content.trim()) {
     return {
@@ -358,6 +407,20 @@ export async function getFileDiff(
   }
 
   return limitLines(filePath, "diff", content);
+}
+
+function combineDiffs(stagedDiff: string, unstagedDiff: string) {
+  const sections = [];
+
+  if (stagedDiff.trim()) {
+    sections.push(["# Staged changes", stagedDiff.trimEnd()].join("\n\n"));
+  }
+
+  if (unstagedDiff.trim()) {
+    sections.push(["# Unstaged changes", unstagedDiff.trimEnd()].join("\n\n"));
+  }
+
+  return sections.join("\n\n");
 }
 
 async function getUntrackedPreview(projectPath: string, filePath: string): Promise<DiffResult> {
@@ -472,7 +535,9 @@ export async function restoreSelectedFiles(
     }
 
     try {
-      await runGit(projectPath, ["restore", "--", file.filePath], { timeout: 15000 });
+      await runGit(projectPath, ["restore", "--staged", "--worktree", "--", file.filePath], {
+        timeout: 15000
+      });
       results.push({
         filePath: file.filePath,
         success: true,
