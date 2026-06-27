@@ -5,8 +5,12 @@ const eslintConfig = [
   {
     ignores: [
       ".next/**",
+      ".codex-node_modules/**",
+      ".pnpm-store/**",
       "node_modules/**",
       "coverage/**",
+      "outputs/**",
+      "work/**",
       "prisma/dev.db",
       "prisma/*.db"
     ]
