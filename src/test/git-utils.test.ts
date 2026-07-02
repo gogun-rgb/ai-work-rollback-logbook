@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { UserFacingError } from "@/lib/errors";
 import {
+  assertUsableProjectPath,
   assertSafeRelativePath,
   ensureGitRepository,
   getGitBinary,
@@ -78,6 +79,11 @@ describe("Git status parsing", () => {
 });
 
 describe("Path safety", () => {
+  it("requires an absolute project folder path", async () => {
+    await expect(assertUsableProjectPath("")).rejects.toThrow(UserFacingError);
+    await expect(assertUsableProjectPath("relative-project")).rejects.toThrow(UserFacingError);
+  });
+
   it("rejects paths outside of the project", () => {
     expect(() => assertSafeRelativePath(tempRoot, "../outside.txt")).toThrow(UserFacingError);
     expect(() => assertSafeRelativePath(tempRoot, path.resolve(tempRoot, "file.txt"))).toThrow(

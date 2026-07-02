@@ -69,7 +69,20 @@ export function getGitBinary() {
 }
 
 export async function assertUsableProjectPath(inputPath: string) {
-  const absolutePath = path.resolve(inputPath.trim());
+  const trimmedPath = inputPath.trim();
+
+  if (!trimmedPath) {
+    throw new UserFacingError("프로젝트 폴더의 절대 경로를 입력해주세요.", 400);
+  }
+
+  if (!path.isAbsolute(trimmedPath)) {
+    throw new UserFacingError(
+      "상대 경로가 아닌 프로젝트 폴더의 절대 경로를 입력해주세요.",
+      400
+    );
+  }
+
+  const absolutePath = path.resolve(trimmedPath);
 
   let stat;
   try {
