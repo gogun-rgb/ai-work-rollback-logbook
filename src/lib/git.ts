@@ -363,12 +363,39 @@ export function summarizeChanges(changes: GitChange[]) {
   };
 }
 
+export function isSensitivePreviewPath(filePath: string) {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  const baseName = path.posix.basename(normalized);
+
+  return (
+    baseName === ".env" ||
+    baseName.startsWith(".env.") ||
+    baseName.endsWith(".pem") ||
+    baseName.endsWith(".key") ||
+    baseName.startsWith("credentials") ||
+    baseName.startsWith("secrets") ||
+    normalized.includes("/credentials") ||
+    normalized.includes("/secrets")
+  );
+}
+
 export async function getFileDiff(
   projectPath: string,
   filePath: string,
   gitStatus: GitChangeStatus
 ): Promise<DiffResult> {
   assertSafeRelativePath(projectPath, filePath);
+
+  if (isSensitivePreviewPath(filePath)) {
+    return {
+      filePath,
+      type: "empty",
+      content: "",
+      truncated: false,
+      lineCount: 0,
+      message: "Sensitive file previews are hidden to avoid exposing local secrets."
+    };
+  }
 
   if (gitStatus === "UNTRACKED") {
     return getUntrackedPreview(projectPath, filePath);

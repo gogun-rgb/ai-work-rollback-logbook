@@ -10,7 +10,7 @@ export const projectIdSchema = z.object({
 
 export const diffRequestSchema = z.object({
   filePath: z.string().min(1),
-  gitStatus: z.string().min(1)
+  gitStatus: z.enum(["ADDED", "MODIFIED", "DELETED", "RENAMED", "UNTRACKED", "UNKNOWN"])
 });
 
 export const fileDecisionSchema = z.object({

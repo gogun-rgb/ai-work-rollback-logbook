@@ -179,6 +179,20 @@ describe("Git integration", () => {
     expect(diff.content).toContain("+unstaged");
   });
 
+  it("does not preview sensitive untracked files", async () => {
+    await initRepository(tempRoot);
+    await fs.writeFile(path.join(tempRoot, "tracked.txt"), "one\n", "utf8");
+    await git(tempRoot, ["add", "."]);
+    await git(tempRoot, ["commit", "-m", "initial"]);
+    await fs.writeFile(path.join(tempRoot, ".env"), "OPENAI_API_KEY=should-not-render\n", "utf8");
+
+    const diff = await getFileDiff(tempRoot, ".env", "UNTRACKED");
+
+    expect(diff.type).toBe("empty");
+    expect(diff.content).toBe("");
+    expect(diff.message).toContain("Sensitive file previews are hidden");
+  });
+
   it("does not delete untracked files", async () => {
     await initRepository(tempRoot);
     await fs.writeFile(path.join(tempRoot, "tracked.txt"), "one\n", "utf8");
